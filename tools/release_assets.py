@@ -1,4 +1,4 @@
-"""Builds the files of a GitHub release from a tag (used by .github/workflows/release.yml).
+"""Builds the files of a GitHub release for a tag (used by .github/workflows/release.yml, see tools/release_plan.py).
 
   python tools/release_assets.py v1.2.3 dist/release            -> PCHub-update-1.2.3.zip + NOTES.md
   python tools/release_assets.py plugin-oled_saver-2.3.0 dist/release -> PCHub-plugin-oled_saver-2.3.0.zip + NOTES.md

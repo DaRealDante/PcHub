@@ -67,7 +67,7 @@ Useful arguments: `--tray` (start hidden), `--open <pluginId>`, `--no-splash`, `
 
 PC Hub checks this repository's **Releases** at startup and every 6 hours. When it finds something newer, it downloads it, verifies it and asks you to **restart**. You can change this in *Settings › About*: check automatically, download automatically, check now.
 
-| Release tag | Asset | What it updates |
+| Release | Asset | What it updates |
 |---|---|---|
 | `v1.2.3` | `PCHub-update-1.2.3.zip` (+ `PCHub-Setup-1.2.3.exe`) | the whole app, without reinstalling |
 | `plugin-<id>-<version>` | `PCHub-plugin-<id>-<version>.zip` | a single plugin (PC Hub keeps its version) |
@@ -78,11 +78,14 @@ The `BUILD_LEVEL` in `pchub/__init__.py` decides which way an app update goes:
 
 If the first start after an update crashes, PC Hub goes back to the previous version by itself.
 
-### Publishing a release (maintainers)
-1. Change the code. Then bump `VERSION` in `pchub/__init__.py` for an app release, or the plugin's `version` for a plugin release.
-2. Add a `## v1.2.3` (or `## plugin-<id>-<version>`) section to `CHANGELOG.md`.
-3. Commit, push, then tag and push the tag: `git tag v1.2.3 && git push origin v1.2.3`.
-4. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the update zip with `tools/release_assets.py` and publishes the release. For `v*` tags it also builds the Windows installer.
+### Publishing (maintainers)
+Push to `main`. [`.github/workflows/release.yml`](.github/workflows/release.yml) works out what changed
+(`tools/release_plan.py`) and publishes it by itself:
+- **`VERSION` went up** in `pchub/__init__.py`: the workflow publishes release `vX.Y.Z` with the update zip, then a
+  Windows job builds and attaches `PCHub-Setup-X.Y.Z.exe`.
+- **Only a plugin's `version` went up**: the workflow publishes release `plugin-<id>-<version>` with that plugin's zip.
+
+Write the notes in `CHANGELOG.md` under `## vX.Y.Z` (or `## plugin-<id>-<version>`).
 
 ---
 

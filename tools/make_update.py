@@ -4,8 +4,8 @@
   python tools/make_update.py --plugin <id>   -> dist/PCHub-plugin-<id>-<pluginVersion>.zip (one built-in plugin,
       PC Hub keeps its version). Bump `version` in the plugin class first.
 
-Normally you don't run this by hand: pushing a tag (`v1.2.3` or `plugin-<id>-<version>`) makes the GitHub workflow
-build the zip and publish it as a release, and every PC Hub downloads it by itself.
+Normally you don't run this by hand: after a push to main the GitHub workflow publishes a release when VERSION or a
+plugin's version went up, and every PC Hub downloads it by itself.
 Manual install: Settings › Install update, or drop the zip in %APPDATA%\\PC Hub\\updates\\ (pending.zip for the app,
 plugins\\ for a plugin).
 """

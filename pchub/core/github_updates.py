@@ -1,6 +1,6 @@
 """Automatic updates from GitHub Releases (repo in pchub.UPDATE_REPO).
 
-Release layout (made by .github/workflows/release.yml from a tag push):
+Release layout (published by .github/workflows/release.yml after a push to main):
 - tag `v1.2.3`                 -> asset `PCHub-update-1.2.3.zip` (quick app update, see updater_boot.py)
                                   and, when built, `PCHub-Setup-1.2.3.exe` (full installer)
 - tag `plugin-<id>-<version>`  -> asset `PCHub-plugin-<id>-<version>.zip` (one plugin, see core/plugin_updates.py)

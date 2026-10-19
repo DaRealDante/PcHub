@@ -1,38 +1,61 @@
-# Publishes PC Hub updates. Push a tag and GitHub does the rest:
-#   v1.2.3                 -> release "PC Hub 1.2.3" with PCHub-update-1.2.3.zip (+ PCHub-Setup-1.2.3.exe)
-#   plugin-<id>-<version>  -> release with PCHub-plugin-<id>-<version>.zip
-# Every installed PC Hub checks the releases and downloads what it needs by itself.
+# Publishes PC Hub updates after every push to main. Nothing to do by hand:
+#   pchub.VERSION went up            -> release vX.Y.Z with PCHub-update-X.Y.Z.zip (+ PCHub-Setup-X.Y.Z.exe)
+#   only a plugin's `version` went up -> release plugin-<id>-<version> with PCHub-plugin-<id>-<version>.zip
+# (tools/release_plan.py decides, tools/release_assets.py builds). Every installed PC Hub picks them up by itself.
 name: Release
 
 on:
   push:
-    tags: ["v*", "plugin-*"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  update:
-    name: Update package
+  publish:
+    name: Publish updates
     runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.plan.outputs.app }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build the update zip and the notes
-        run: python tools/release_assets.py "$GITHUB_REF_NAME" dist/release
-      - name: Publish the release
+      - name: What changed
+        id: plan
+        run: |
+          python tools/release_plan.py > plan.json
+          cat plan.json
+          echo "app=$(python -c "import json;print(json.load(open('plan.json'))['app'] or '')")" >> "$GITHUB_OUTPUT"
+      - name: Publish releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/release/*.zip \
-            --title "$(cat dist/release/TITLE.txt)" --notes-file dist/release/NOTES.md --verify-tag
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for tag in $(python -c "import json;p=json.load(open('plan.json'));print(' '.join(([p['app']] if p['app'] else []) + p['plugins']))"); do
+            rm -rf "dist/release-$tag"
+            python tools/release_assets.py "$tag" "dist/release-$tag"
+            gh release create "$tag" dist/release-$tag/*.zip --target "$GITHUB_SHA" \
+              --title "$(cat dist/release-$tag/TITLE.txt)" --notes-file "dist/release-$tag/NOTES.md"
+          done
+          for tag in $(python -c "import json;print(' '.join(json.load(open('plan.json'))['mark']))"); do
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "$tag"
+          done
 
   installer:
     name: Windows installer
-    if: startsWith(github.ref_name, 'v')
-    needs: update
+    needs: publish
+    if: needs.publish.outputs.app != ''
     runs-on: windows-latest
     continue-on-error: true
     steps:
@@ -59,4 +82,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$env:GITHUB_REF_NAME" (Get-ChildItem dist\installer\*.exe).FullName --clobber
+        run: gh release upload "${{ needs.publish.outputs.app }}" (Get-ChildItem dist\installer\*.exe).FullName --clobber

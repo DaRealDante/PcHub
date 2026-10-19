@@ -1,0 +1,62 @@
+# Publishes PC Hub updates. Push a tag and GitHub does the rest:
+#   v1.2.3                 -> release "PC Hub 1.2.3" with PCHub-update-1.2.3.zip (+ PCHub-Setup-1.2.3.exe)
+#   plugin-<id>-<version>  -> release with PCHub-plugin-<id>-<version>.zip
+# Every installed PC Hub checks the releases and downloads what it needs by itself.
+name: Release
+
+on:
+  push:
+    tags: ["v*", "plugin-*"]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the update zip and the notes
+        run: python tools/release_assets.py "$GITHUB_REF_NAME" dist/release
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/release/*.zip \
+            --title "$(cat dist/release/TITLE.txt)" --notes-file dist/release/NOTES.md --verify-tag
+
+  installer:
+    name: Windows installer
+    if: startsWith(github.ref_name, 'v')
+    needs: update
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Build the exe
+        run: |
+          python tools/make_icon.py
+          python tools/write_version_info.py
+          python -m PyInstaller --noconfirm --clean build/pchub.spec --distpath dist --workpath build/work
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = python -c "import pchub;print(pchub.VERSION)"
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DAppVersion=$version" build\installer.iss
+      - name: Attach the installer to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:GITHUB_REF_NAME" (Get-ChildItem dist\installer\*.exe).FullName --clobber

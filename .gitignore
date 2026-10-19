@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+build/work/
+build/version_info.txt
+*.spec.bak
+docs/PROJECT_CONTEXT.md
+snapshots/

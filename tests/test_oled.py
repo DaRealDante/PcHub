@@ -1,4 +1,5 @@
 import math
+import time
 
 import pytest
 from conftest import processEvents
@@ -470,3 +471,40 @@ def test_reset_calibration_with_distraction_points(qtApp, dataDir):
     assert plugin.calibration() == (DEFAULT_BASE_YAW, DEFAULT_BASE_PITCH)
     assert plugin.currentLimits()["down"] > 0
     assert plugin.distractionDirections()
+
+
+def test_camera_worker_restart_never_revives_a_stuck_thread(qtApp, monkeypatch):
+    import threading
+    from pchub.plugins.oled_saver import vision
+    release = threading.Event()
+    opened = []
+
+    class StuckCapture:
+        def grab(self):
+            release.wait(5)
+            return False
+
+        def release(self):
+            pass
+
+    def openCamera(self, cv2):
+        opened.append(threading.current_thread())
+        return StuckCapture()
+
+    monkeypatch.setattr(vision.CameraWorker, "_openCamera", openCamera)
+    monkeypatch.setattr(vision, "MODEL_PATH", type("P", (), {"exists": lambda self: True})())
+    worker = vision.CameraWorker(lambda key: None, lambda: False)
+    statuses = []
+    worker.statusChanged.connect(lambda status, message: statuses.append(status))
+    worker.start()
+    firstEvent, firstThread = worker.stopEvent, worker.thread
+    time.sleep(0.2)
+    worker.stop(wait=False)
+    worker.start()
+    assert worker.stopEvent is not firstEvent
+    assert firstEvent.is_set(), "the old thread keeps its stop flag even after a new start"
+    release.set()
+    firstThread.join(3)
+    assert not firstThread.is_alive()
+    worker.stop()
+    assert not worker.isRunning()

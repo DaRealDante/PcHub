@@ -188,6 +188,7 @@ class CameraWorker(QObject):
         self.previewWanted = previewWanted
         self.stopEvent = threading.Event()
         self.thread = None
+        self.stoppingThread = None
         self.status = "off"
         self.relaxed = False
 
@@ -197,21 +198,38 @@ class CameraWorker(QObject):
     def start(self):
         if self.isRunning():
             return
-        self.stopEvent.clear()
-        self.thread = threading.Thread(target=self._run, name="oled-camera", daemon=True)
+        if self.stoppingThread is not None and self.stoppingThread.is_alive():
+            self.stoppingThread.join(3)
+            if self.stoppingThread.is_alive():
+                log.warning("The previous camera thread is still busy, starting anyway")
+        self.stoppingThread = None
+        # every run gets its own stop flag: a thread stuck in the driver can never be "un-stopped" by a new start
+        self.stopEvent = threading.Event()
+        self.thread = threading.Thread(target=self._run, args=(self.stopEvent,), name="oled-camera", daemon=True)
         self.thread.start()
 
     def stop(self, wait=True):
         self.stopEvent.set()
-        if wait and self.thread is not None:
-            self.thread.join(3)
+        if self.thread is not None:
+            if wait:
+                self.thread.join(3)
+            if self.thread.is_alive():
+                self.stoppingThread = self.thread
         self.thread = None
         self._setStatus("off")
 
-    def _setStatus(self, status, message=""):
+    def _setStatus(self, status, message="", stopEvent=None):
+        if stopEvent is not None and stopEvent.is_set():
+            return
         if status != self.status:
             self.status = status
-            self.statusChanged.emit(status, message)
+            self._emit(self.statusChanged, status, message)
+
+    def _emit(self, signal, *values):
+        try:
+            signal.emit(*values)
+        except RuntimeError:
+            pass  # the plugin was stopped/reloaded and this worker is gone
 
     def _openCamera(self, cv2):
         cameraIndex = int(self.settings("cameraIndex") or 0)
@@ -235,50 +253,50 @@ class CameraWorker(QObject):
             fps = max(fps, FAST_WAKE_FPS)
         return fps
 
-    def _run(self):
+    def _run(self, stopEvent):
         try:
             import cv2
         except ImportError as error:
-            self._setStatus("error", f"OpenCV: {error}")
+            self._setStatus("error", f"OpenCV: {error}", stopEvent=stopEvent)
             return
         if not MODEL_PATH.exists():
-            self._setStatus("error", "face_detection_yunet_2023mar.onnx missing")
+            self._setStatus("error", "face_detection_yunet_2023mar.onnx missing", stopEvent=stopEvent)
             return
-        while not self.stopEvent.is_set():
-            self._setStatus("starting")
+        while not stopEvent.is_set():
+            self._setStatus("starting", stopEvent=stopEvent)
             capture = self._openCamera(cv2)
             if capture is None:
-                self._setStatus("noCamera")
-                self.stopEvent.wait(8)
+                self._setStatus("noCamera", stopEvent=stopEvent)
+                stopEvent.wait(8)
                 continue
             finder = None
             failures = 0
-            self._setStatus("on")
+            self._setStatus("on", stopEvent=stopEvent)
             lastAnalysisAt = 0.0
             try:
                 cv2.setNumThreads(1)
             except Exception:
                 pass
             try:
-                while not self.stopEvent.is_set():
+                while not stopEvent.is_set():
                     interval = 1.0 / self.targetFps()
                     if self.isFast():
                         # waking up: read every frame so the newest one is always ready
                         grabbed = capture.grab()
                         if grabbed and time.monotonic() - lastAnalysisAt < interval - 0.004:
-                            self.stopEvent.wait(0.002)
+                            stopEvent.wait(0.002)
                             continue
                     else:
                         remaining = lastAnalysisAt + interval - time.monotonic()
                         if remaining > 0:
-                            self.stopEvent.wait(min(remaining, 0.05))
+                            stopEvent.wait(min(remaining, 0.05))
                             continue
                         grabbed = capture.grab() and capture.grab()
                     if not grabbed:
                         failures += 1
                         if failures > 15:
                             break
-                        self.stopEvent.wait(0.1)
+                        stopEvent.wait(0.1)
                         continue
                     ok, frame = capture.retrieve()
                     if not ok or frame is None:
@@ -298,11 +316,13 @@ class CameraWorker(QObject):
                               "height": frame.shape[0], "preview": None, "scale": 1.0}
                     if self.previewWanted():
                         result["preview"], result["scale"] = framePreview(frame)
-                    self.frameAnalyzed.emit(result)
+                    if stopEvent.is_set():
+                        break
+                    self._emit(self.frameAnalyzed, result)
             except Exception as error:
                 log.exception("Camera loop failed")
-                self._setStatus("error", str(error))
-                self.stopEvent.wait(5)
+                self._setStatus("error", str(error), stopEvent=stopEvent)
+                stopEvent.wait(5)
             finally:
                 capture.release()
-        self._setStatus("off")
+        self._setStatus("off", stopEvent=stopEvent)

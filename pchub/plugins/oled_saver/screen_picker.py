@@ -94,10 +94,15 @@ class ScreenMap(QWidget):
             painter.drawText(rect.adjusted(4, 0, -4, -6), Qt.AlignHCenter | Qt.AlignBottom, label)
 
     def _indexAt(self, position):
-        for index, (_screen, rect) in enumerate(self.monitorRects):
+        screens = QGuiApplication.screens()
+        for index, (screen, rect) in enumerate(self.monitorRects):
             if rect.contains(position):
-                return index
+                return index if screen in screens else -1
         return -1
+
+    def forgetScreens(self):
+        self.monitorRects = []
+        self.hoverIndex = -1
 
     def mouseMoveEvent(self, event):
         index = self._indexAt(event.position())
@@ -155,6 +160,7 @@ class ScreenPicker(QWidget):
         self.refresh()
 
     def refresh(self, *args):
+        self.screenMap.forgetScreens()
         if not self.isVisible():
             self.dirty = True
             return

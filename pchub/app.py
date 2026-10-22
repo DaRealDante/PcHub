@@ -40,6 +40,7 @@ APP_DEFAULTS = {
 
 class PCHubApp(QObject):
     appHotkeyStatusChanged = Signal()
+    threadErrorRaised = Signal(object, object, str)
 
     def __init__(self, argv):
         super().__init__()
@@ -93,6 +94,16 @@ class PCHubApp(QObject):
                 self.singleInstance.release()
                 return False
             self.elevationFailed = True
+
+        from pchub.core.crash_guard import CrashGuard, HEARTBEAT_SECONDS
+        self.crashGuard = CrashGuard(VERSION)
+        self.previousCrash = self.crashGuard.begin()
+        self.threadErrorRaised.connect(self._onThreadError)
+        self.crashGuard.threadErrorHandler = self.threadErrorRaised.emit
+        self.heartbeatTimer = QTimer(self)
+        self.heartbeatTimer.setInterval(HEARTBEAT_SECONDS * 1000)
+        self.heartbeatTimer.timeout.connect(self.crashGuard.heartbeat)
+        self.heartbeatTimer.start()
 
         from pchub.ui.fonts import loadFonts
         from pchub.ui.theme import ThemeManager, setThemeManager
@@ -295,12 +306,16 @@ class PCHubApp(QObject):
     def pluginForTraceback(self, tracebackObject):
         """Which plugin's code raised this exception (deepest frame inside a plugin folder), or None."""
         import traceback as tracebackModule
+        return self.pluginForFiles([frame.filename for frame in tracebackModule.extract_tb(tracebackObject)])
+
+    def pluginForFiles(self, fileNames):
+        """The plugin owning the last of these source files that is inside a plugin folder, or None."""
         from pathlib import Path
         builtinRoot = str(Path(__file__).resolve().parent / "plugins")
         userRoot = str(userPluginsDir().resolve())
         found = None
-        for frame in tracebackModule.extract_tb(tracebackObject):
-            fileName = frame.filename.replace("/", os.sep)
+        for fileName in fileNames:
+            fileName = fileName.replace("/", os.sep)
             for root in (userRoot, builtinRoot):
                 if fileName.startswith(root + os.sep):
                     folderName = fileName[len(root) + 1:].split(os.sep)[0]
@@ -343,6 +358,35 @@ class PCHubApp(QObject):
              (tr("plugin.global.uninstallButton"), lambda: self.requestUninstall(pluginId), "trash-2"),
              (tr("plugin.disable"), lambda: self.disableBrokenPlugin(pluginId), "power")],
             accent="#F87171", sound="notify"))
+
+    def _onThreadError(self, error, tracebackObject, detailsText):
+        pluginId = self.pluginForTraceback(tracebackObject) if getattr(self, "pluginManager", None) else None
+        if pluginId:
+            self.reportPluginProblem(pluginId, error, detailsText)
+
+    def _reportPreviousCrash(self):
+        previous = self.previousCrash
+        if not previous:
+            return
+        aliveAt = time.strftime("%H:%M", time.localtime(float(previous.get("aliveAt") or time.time())))
+        dump = previous.get("dump")
+        logPath = self.crashGuard.lastCrashPath if dump else self.crashGuard.crashPath.parent / "pchub.log"
+        pluginId = None
+        if dump:
+            pluginId = self.pluginForFiles([frame[0] for frame in reversed(dump["frames"])])
+        actions = [(tr("crash.openLog"), lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(logPath))),
+                    "file-text")]
+        if pluginId and pluginId in self.pluginManager.records:
+            self.pluginManager.records[pluginId].problemShownAt = time.time()
+            self.reportPluginProblem(pluginId, tr("crash.nativeError", error=dump["error"]), dump["text"])
+            message = tr("crash.messagePlugin", name=self.pluginManager.displayName(pluginId), error=dump["error"],
+                         time=aliveAt)
+            actions = [(tr("plugin.errorDetails"), lambda: self.showPluginErrorDetails(pluginId), "file-text"),
+                       (tr("plugin.disable"), lambda: self.disableBrokenPlugin(pluginId), "power")]
+        else:
+            cause = tr("crash.causeDump", error=dump["error"]) if dump else tr("crash.causeNone")
+            message = tr("crash.messageUnknown", time=aliveAt, cause=cause)
+        self.alerts.show(tr("crash.title"), message, "triangle-alert", actions, accent="#F87171", sound="notify")
 
     def _onPluginStatusForProblems(self, pluginId):
         record = self.pluginManager.records.get(pluginId)
@@ -1141,6 +1185,7 @@ class PCHubApp(QObject):
         return True
 
     def _announceStartupProblems(self):
+        self._reportPreviousCrash()
         for record in self.pluginManager.installedRecords():
             if record.status == "error":
                 self.reportPluginProblem(record.pluginId, record.error, record.errorDetails)
@@ -1180,6 +1225,8 @@ class PCHubApp(QObject):
             from pchub.core.storage import _allStores
             for store in _allStores:
                 store.saveTimer.stop()
+        if getattr(self, "crashGuard", None) is not None:
+            self.crashGuard.end()
         self.singleInstance.release()
 
 

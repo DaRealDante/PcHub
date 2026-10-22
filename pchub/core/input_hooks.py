@@ -67,6 +67,7 @@ class HookService:
         self.lastRealInput = 0.0
         self.available = isWindows
         self.installedHooks = (False, False)
+        self.lastFailureLogAt = 0.0
 
     # subscriptions --------------------------------------------------------
     def subscribe(self, name, keyboardCallback=None, mouseCallback=None, wantsMoves=False):
@@ -161,6 +162,12 @@ class HookService:
             self.moveSubscribers.clear()
         self._stop()
 
+    def _hookFailed(self, kind):
+        now = time.monotonic()
+        if now - self.lastFailureLogAt > 60:
+            self.lastFailureLogAt = now
+            log.exception("The %s hook failed", kind)
+
     def _run(self):
         from ctypes import wintypes
         user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -184,43 +191,49 @@ class HookService:
         user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
         kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
-        def keyboardProc(nCode, wParam, lParam):
-            if nCode == 0:
-                data = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                event = KeyEvent(data.vkCode, data.scanCode, wParam in (WM_KEYDOWN, WM_SYSKEYDOWN),
-                                 bool(data.flags & LLKHF_INJECTED), data.dwExtraInfo == PCHUB_SIGNATURE)
-                if self.dispatchKey(event):
-                    return 1
-            return user32.CallNextHookEx(None, nCode, wParam, lParam)
-
+        keyboardStructPointer = ctypes.POINTER(KBDLLHOOKSTRUCT)
         monotonic = time.monotonic
-        mousePointer = ctypes.POINTER(MSLLHOOKSTRUCT)
+        mouseStructPointer = ctypes.POINTER(MSLLHOOKSTRUCT)
         callNext = user32.CallNextHookEx
 
-        def mouseProc(nCode, wParam, lParam):
-            if wParam == WM_MOUSEMOVE and nCode == 0 and not self.moveSubscribers:
-                # fast path: nobody wants movement, just remember that a real person moved the mouse
-                if not ctypes.cast(lParam, mousePointer).contents.flags & LLMHF_INJECTED:
-                    self.lastRealInput = monotonic()
-                return callNext(None, nCode, wParam, lParam)
-            if nCode == 0:
-                data = ctypes.cast(lParam, mousePointer).contents
-                wheel = ctypes.c_short((data.mouseData >> 16) & 0xFFFF).value if wParam in (WM_MOUSEWHEEL, WM_MOUSEHWHEEL) else 0
-                event = MouseEvent(wParam, data.pt.x, data.pt.y, wheel, bool(data.flags & LLMHF_INJECTED),
-                                   data.dwExtraInfo == PCHUB_SIGNATURE)
-                if wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
-                    event.button = "x1" if (data.mouseData >> 16) == 1 else "x2"
-                if self.dispatchMouse(event):
-                    return 1
-            return user32.CallNextHookEx(None, nCode, wParam, lParam)
+        def keyboardProc(nCode, wParam, lParam):
+            try:
+                if nCode == 0:
+                    data = ctypes.cast(lParam, keyboardStructPointer).contents
+                    event = KeyEvent(data.vkCode, data.scanCode, wParam in (WM_KEYDOWN, WM_SYSKEYDOWN),
+                                     bool(data.flags & LLKHF_INJECTED), data.dwExtraInfo == PCHUB_SIGNATURE)
+                    if self.dispatchKey(event):
+                        return 1
+            except Exception:
+                self._hookFailed("keyboard")
+            return callNext(None, nCode, wParam, lParam)
 
-        keyboardPointer = HookProc(keyboardProc)
-        mousePointer = HookProc(mouseProc)
+        def mouseProc(nCode, wParam, lParam):
+            try:
+                if wParam == WM_MOUSEMOVE and nCode == 0 and not self.moveSubscribers:
+                    # fast path: nobody wants movement, just remember that a real person moved the mouse
+                    if not ctypes.cast(lParam, mouseStructPointer).contents.flags & LLMHF_INJECTED:
+                        self.lastRealInput = monotonic()
+                elif nCode == 0:
+                    data = ctypes.cast(lParam, mouseStructPointer).contents
+                    wheel = ctypes.c_short((data.mouseData >> 16) & 0xFFFF).value if wParam in (WM_MOUSEWHEEL, WM_MOUSEHWHEEL) else 0
+                    event = MouseEvent(wParam, data.pt.x, data.pt.y, wheel, bool(data.flags & LLMHF_INJECTED),
+                                       data.dwExtraInfo == PCHUB_SIGNATURE)
+                    if wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+                        event.button = "x1" if (data.mouseData >> 16) == 1 else "x2"
+                    if self.dispatchMouse(event):
+                        return 1
+            except Exception:
+                self._hookFailed("mouse")
+            return callNext(None, nCode, wParam, lParam)
+
+        keyboardProcPointer = HookProc(keyboardProc)
+        mouseProcPointer = HookProc(mouseProc)
         module = kernel32.GetModuleHandleW(None)
         wantKeyboard, wantMouse = self._neededHooks()
         self.installedHooks = (wantKeyboard, wantMouse)
-        keyboardHook = user32.SetWindowsHookExW(13, keyboardPointer, module, 0) if wantKeyboard else None
-        mouseHook = user32.SetWindowsHookExW(14, mousePointer, module, 0) if wantMouse else None
+        keyboardHook = user32.SetWindowsHookExW(13, keyboardProcPointer, module, 0) if wantKeyboard else None
+        mouseHook = user32.SetWindowsHookExW(14, mouseProcPointer, module, 0) if wantMouse else None
         if (wantKeyboard and not keyboardHook) or (wantMouse and not mouseHook):
             log.error("Could not install input hooks (error %s)", ctypes.get_last_error())
         self.threadId = kernel32.GetCurrentThreadId()
@@ -234,7 +247,7 @@ class HookService:
             user32.UnhookWindowsHookEx(keyboardHook)
         if mouseHook:
             user32.UnhookWindowsHookEx(mouseHook)
-        del keyboardPointer, mousePointer
+        del keyboardProcPointer, mouseProcPointer
 
 
 _service = None

@@ -116,7 +116,7 @@ class OledSaverPlugin(PluginBase):
     description = T("Protegge il monitor OLED: blackout quando ti allontani, oscura piano piano quando sei distratto.",
                     "Protects your OLED: blackout when you walk away, gradual dimming when you're distracted.")
     icon = "moon"
-    version = "2.2.0"
+    version = "2.2.1"
     author = "Ken"
     settingsInPage = True
     settingsSchema = [

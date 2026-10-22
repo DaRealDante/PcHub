@@ -2,6 +2,15 @@
 
 Each `## <tag>` section becomes the notes of the GitHub release with that tag.
 
+## v1.1.7
+- **Crash report**: if PC Hub ever closes by itself, the next start tells you, with the time and, when it can be
+  found, the plugin that was running (Details / Disable). The full report is saved in `logs\crash-last.log`.
+  The log also records memory use every 30 minutes and Qt errors.
+- Fixed the shared mouse hook (broken since v1.1.5): every mouse event raised an error inside the hook, so mouse
+  movement was ignored (OLED Saver with "ignore other programs" on only counted the keyboard) and CPU was wasted.
+- OLED Saver: a webcam stuck in its driver can no longer be revived next to a new one after a restart; safer monitor
+  map when a monitor turns off.
+
 ## v1.1.6
 - **Updates from GitHub**: PC Hub checks this repository's releases at startup and every 6 hours, downloads app and
   plugin updates by itself, verifies them and asks you to restart. Settings › About: auto check, auto download,

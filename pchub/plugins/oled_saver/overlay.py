@@ -38,7 +38,6 @@ class OverlayWindow(QWidget):
         self.setWindowOpacity(0.0)
 
     def setScreenGeometry(self, screen):
-        self.targetScreen = screen
         self.setGeometry(screen.geometry())
 
     def paintEvent(self, event):
